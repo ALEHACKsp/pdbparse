@@ -170,20 +170,29 @@ uintptr_t pdb_parse::get_address_from_symbol(std::string_view function_name, con
 		}
 	}
 
+	//helper function to convert ASCII strings to UNICODE strings
+	auto multibyte_to_widechar = [](std::string_view str)
+	{
+		std::wstring wide_text;
+		wide_text.resize(str.length());
+
+		std::transform(str.begin(), str.end(), wide_text.begin(),
+		[](char val)
+		{
+			return std::btowc(val);
+		});
+
+		return wide_text;
+	};
+
 	//find debug info from pdb file
 	CComPtr<IDiaDataSource> source;
 
 	if (FAILED(CoCreateInstance(CLSID_DiaSource, NULL, CLSCTX_INPROC_SERVER, __uuidof(IDiaDataSource), (void**)&source)))
 		return 0;
 
-	{
-		wchar_t wide_path[MAX_PATH];
-		memset(wide_path, 0, MAX_PATH * 2);
-
-		MultiByteToWideChar(CP_ACP, 0, pdb_path.c_str(), (int)pdb_path.length(), wide_path, MAX_PATH);
-		if (FAILED(source->loadDataFromPdb(wide_path)))
-			return 0;
-	}
+	if (FAILED(source->loadDataFromPdb(multibyte_to_widechar(pdb_path).c_str())))
+		return 0;
 
 	CComPtr<IDiaSession> session;
 	if (FAILED(source->openSession(&session)))
@@ -197,20 +206,9 @@ uintptr_t pdb_parse::get_address_from_symbol(std::string_view function_name, con
 	CComPtr<IDiaSymbol> current_symbol;
 	ULONG celt = 0;
 
-	{
-		//while it's never used, the maximum function name length for a C++ compiler 'should be atleast 1024 characters', according to stackoverflow, with MSVC and intel's compiler supporting 2048,
-		//and GCC supporting an unlimited amount.
-		constexpr auto max_name_length = 1024;
-
-		wchar_t wide_function_name[max_name_length];
-		memset(wide_function_name, 0, max_name_length * 2);
-
-		MultiByteToWideChar(CP_ACP, 0, function_name.data(), (int)function_name.length(), wide_function_name, max_name_length);
-
-		//filter the results so it only gives us symbols with the name we want
-		if (FAILED(global->findChildren(SymTagNull, wide_function_name, nsNone, &enum_symbols)))
-			return 0;
-	}
+	//filter the results so it only gives us symbols with the name we want
+	if (FAILED(global->findChildren(SymTagNull, multibyte_to_widechar(function_name).c_str(), nsNone, &enum_symbols)))
+		return 0;
 
 	//loop just in case? ive only ever seen this need to be a conditional
 	while (SUCCEEDED(enum_symbols->Next(1, &current_symbol, &celt)) && celt == 1)
