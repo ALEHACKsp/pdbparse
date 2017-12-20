@@ -45,7 +45,7 @@ struct module_t
 };
 
 //used with maps which take in std::strings so it compares in lowercase
-struct map_compatator
+struct map_comparator
 {
 	bool operator() (const std::string &left, const std::string &right) const { return !_stricmp(left.c_str(), right.c_str()); }
 };

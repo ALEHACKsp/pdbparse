@@ -19,7 +19,7 @@ struct codeviewInfo_t
 };
 
 //access using module path, has pair with first being map of functions and their RVAs, and second being pdb path
-static std::unordered_map<std::string, std::pair<std::unordered_map<std::string, uintptr_t>, std::string>, std::hash<std::string>, map_compatator> cached_info;
+static std::unordered_map<std::string, std::pair<std::unordered_map<std::string, uintptr_t>, std::string>, std::hash<std::string>, map_comparator> cached_info;
 
 //try to find the module's pdb path, first with the pdb name specified, then with the expected path in the tmp folder
 //if that fails, it's downloaded from the microsoft symbol store (or whatever symbol server you want)
