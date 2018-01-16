@@ -76,8 +76,8 @@ static std::string get_pdb_path(const module_t &module_info, bool is_wow64)
 			for (const auto i : codeview_info->Signature.Data4)
 				pdb_extention_path << std::setw(2) << std::hex << +i;
 
-			//append a 1 because microsoft does it?? idk
-			pdb_extention_path << "1\\" << codeview_info->PdbFileName;
+            //concatenate with Age and PdbFileName
+            pdb_extention_path << codeview_info->Age << "\\" << codeview_info->PdbFileName;
 
 			const auto expected_pdb_path = tmp_folder_path + pdb_extention_path.str();
 			if (does_file_exist(expected_pdb_path))
