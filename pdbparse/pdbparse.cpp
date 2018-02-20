@@ -10,7 +10,7 @@
 
 //codeview debug struct, there is no fucking documentation so i had to search a bit
 //big thanks to https://jpassing.com/2009/04/22/uniquely-identifying-a-modules-build/
-struct codeviewInfo_t
+struct codeview_info_t
 {
 	ULONG CvSignature;
 	GUID Signature;
@@ -37,12 +37,12 @@ static std::string get_pdb_path(const module_t &module_info, bool is_wow64)
 	if (tmp_folder_path.empty())
 	{
 		char folder_buff[MAX_PATH];
-		GetTempPath(MAX_PATH, folder_buff);
+		GetTempPathA(MAX_PATH, folder_buff);
 
 		tmp_folder_path = folder_buff;
 	}
 
-	auto does_file_exist = [](std::string_view path) { return GetFileAttributes(path.data()) != INVALID_FILE_ATTRIBUTES; };
+	auto does_file_exist = [](std::string_view path) -> bool { return GetFileAttributesA(path.data()) != INVALID_FILE_ATTRIBUTES; };
 
 	//determine PDB path by checking debug directory
 	const uintptr_t debug_directory = (is_wow64 ? module_info.ImageHeaders.image_headers32->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_DEBUG].VirtualAddress : module_info.ImageHeaders.image_headers64->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_DEBUG].VirtualAddress);
@@ -50,12 +50,12 @@ static std::string get_pdb_path(const module_t &module_info, bool is_wow64)
 	if (debug_directory)
 	{
 		//loop through debug shit until we find one for IMAGE_DEBUG_TYPE_CODEVIEW
-		for (auto current_debug_dir = (IMAGE_DEBUG_DIRECTORY*)(module_info.module_in_memory.get() + debug_directory); current_debug_dir->SizeOfData; current_debug_dir++)
+		for (auto current_debug_dir = reinterpret_cast<IMAGE_DEBUG_DIRECTORY*>(module_info.module_in_memory.get() + debug_directory); current_debug_dir->SizeOfData; current_debug_dir++)
 		{
 			if (current_debug_dir->Type != IMAGE_DEBUG_TYPE_CODEVIEW)
 				continue;
 
-			const auto codeview_info = (codeviewInfo_t*)(module_info.module_on_disk.get() + current_debug_dir->PointerToRawData);
+			const auto codeview_info = reinterpret_cast<codeview_info_t*>(module_info.module_on_disk.get() + current_debug_dir->PointerToRawData);
 
 			//is the given pdb filename valid?
 			if (does_file_exist(codeview_info->PdbFileName))
@@ -68,7 +68,7 @@ static std::string get_pdb_path(const module_t &module_info, bool is_wow64)
 			//this 'extention path' is used for symbol downloading (URL), so i also make this for the path
 			//pdbname.pdb\guid\pdbname.pdb
 			std::stringstream pdb_extention_path;
-			pdb_extention_path << codeview_info->PdbFileName << "\\";
+			pdb_extention_path << codeview_info->PdbFileName << '\\';
 
 			//convert GUID into a string
 			pdb_extention_path << std::setfill('0') << std::setw(8) << std::hex << codeview_info->Signature.Data1 << std::setw(4) << std::hex << codeview_info->Signature.Data2 << std::setw(4) << std::hex << codeview_info->Signature.Data3;
@@ -77,7 +77,7 @@ static std::string get_pdb_path(const module_t &module_info, bool is_wow64)
 				pdb_extention_path << std::setw(2) << std::hex << +i;
 
             //concatenate with Age and PdbFileName
-            pdb_extention_path << codeview_info->Age << "\\" << codeview_info->PdbFileName;
+			pdb_extention_path << codeview_info->Age << '\\' << codeview_info->PdbFileName;
 
 			const auto expected_pdb_path = tmp_folder_path + pdb_extention_path.str();
 			if (does_file_exist(expected_pdb_path))
@@ -88,16 +88,16 @@ static std::string get_pdb_path(const module_t &module_info, bool is_wow64)
 
 			//download it from the symbol server if we dont have it
 			//first create the subdiectory with the pdb name
-			CreateDirectory((tmp_folder_path + codeview_info->PdbFileName).c_str(), nullptr);
+			CreateDirectoryA((tmp_folder_path + codeview_info->PdbFileName).c_str(), nullptr);
 
 			//then create the guid directory
-			CreateDirectory(expected_pdb_path.substr(0, expected_pdb_path.find_last_of('\\')).c_str(), nullptr);
+			CreateDirectoryA(expected_pdb_path.substr(0, expected_pdb_path.find_last_of('\\')).c_str(), nullptr);
 
 			//symbol server to use
-			constexpr auto symbol_server = "http://msdl.microsoft.com/download/symbols/";
+			static constexpr const auto symbol_server = "http://msdl.microsoft.com/download/symbols/";
 
 			//download it
-			if (URLDownloadToFile(nullptr, (symbol_server + pdb_extention_path.str()).c_str(), expected_pdb_path.c_str(), 0, nullptr) != S_OK)
+			if (URLDownloadToFileA(nullptr, (symbol_server + pdb_extention_path.str()).c_str(), expected_pdb_path.c_str(), 0, nullptr) != S_OK)
 				break;
 
 			//check if it was actually downloaded
@@ -139,7 +139,7 @@ uintptr_t pdb_parse::get_address_from_symbol(std::string_view function_name, con
 		return 0;
 
 	//this is potentially used twice, might aswell find it once (info.txt in the pdb's folder)
-	const auto symbol_info_path = pdb_path.substr(0, pdb_path.find_last_of("\\") + 1) + "info.txt";
+	const auto symbol_info_path = pdb_path.substr(0, pdb_path.find_last_of('\\') + 1) + "info.txt";
 
 	//check if we've ever found this before in another session
 	{
@@ -188,7 +188,7 @@ uintptr_t pdb_parse::get_address_from_symbol(std::string_view function_name, con
 	//find debug info from pdb file
 	CComPtr<IDiaDataSource> source;
 
-	if (FAILED(CoCreateInstance(CLSID_DiaSource, NULL, CLSCTX_INPROC_SERVER, __uuidof(IDiaDataSource), (void**)&source)))
+	if (FAILED(CoCreateInstance(CLSID_DiaSource, NULL, CLSCTX_INPROC_SERVER, __uuidof(IDiaDataSource), reinterpret_cast<void**>(&source))))
 		return 0;
 
 	if (FAILED(source->loadDataFromPdb(multibyte_to_widechar(pdb_path).c_str())))

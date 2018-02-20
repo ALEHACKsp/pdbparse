@@ -4,16 +4,11 @@
 #include <iomanip>
 #include "pdbparse.hpp"
 
-//undefined on x86, define it here so we can use constexpr if statements instead of ugly macros
-#ifndef _M_X64
-#define _M_X64 0
-#endif
-
 //helper function to parse a module
 static module_t get_module_info(std::string_view path, bool is_wow64)
 {
 	//read raw bytes
-	const auto file = CreateFile(path.data(), GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING, 0, nullptr);
+	const auto file = CreateFileA(path.data(), GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING, 0, nullptr);
 
 	if (!file || file == INVALID_HANDLE_VALUE)
 		return module_t();
@@ -26,14 +21,14 @@ static module_t get_module_info(std::string_view path, bool is_wow64)
 
 	//allocate dll bytes and read it
 	auto module_on_disk = std::make_unique<uint8_t[]>(file_size);
-	ReadFile(file, (LPVOID)module_on_disk.get(), file_size, nullptr, nullptr);
+	ReadFile(file, reinterpret_cast<LPVOID>(module_on_disk.get()), file_size, nullptr, nullptr);
 
 	//set image headers
-	auto dos_header = (IMAGE_DOS_HEADER*)module_on_disk.get();
-	auto image_headers = (void*)(module_on_disk.get() + dos_header->e_lfanew);
+	auto dos_header = reinterpret_cast<IMAGE_DOS_HEADER*>(module_on_disk.get());
+	auto image_headers = reinterpret_cast<void*>(module_on_disk.get() + dos_header->e_lfanew);
 
-	auto image_headers32 = (IMAGE_NT_HEADERS32*)image_headers;
-	auto image_headers64 = (IMAGE_NT_HEADERS64*)image_headers;
+	auto image_headers32 = reinterpret_cast<IMAGE_NT_HEADERS32*>(image_headers);
+	auto image_headers64 = reinterpret_cast<IMAGE_NT_HEADERS64*>(image_headers);
 
 	CloseHandle(file);
 
@@ -45,20 +40,28 @@ static module_t get_module_info(std::string_view path, bool is_wow64)
 	if (is_wow64)
 	{
 		module_in_memory = std::make_unique<uint8_t[]>(image_headers32->OptionalHeader.SizeOfImage);
-		sections_array = (IMAGE_SECTION_HEADER*)(image_headers32 + 1);
+		sections_array = reinterpret_cast<IMAGE_SECTION_HEADER*>(image_headers32 + 1);
 		section_count = image_headers32->FileHeader.NumberOfSections;
 	}
 	else
 	{
 		module_in_memory = std::make_unique<uint8_t[]>(image_headers64->OptionalHeader.SizeOfImage);
-		sections_array = (IMAGE_SECTION_HEADER*)(image_headers64 + 1);
+		sections_array = reinterpret_cast<IMAGE_SECTION_HEADER*>(image_headers64 + 1);
 		section_count = image_headers64->FileHeader.NumberOfSections;
 	}
 
 	for (int i = 0; i < section_count; i++)
 	{
+		//"This section's contents shouldn't be put in the final EXE file. These sections are used by the compiler/assembler to pass information to the linker."
 		if (sections_array[i].Characteristics & 0x800)
 			continue;
+
+		//if it's uninitialized data (.bss) we can just set it to zero since its data doesnt exist on disk
+		if (sections_array[i].Characteristics & 0x80)
+		{
+			memset(module_in_memory.get() + sections_array[i].VirtualAddress, 0, sections_array[i].SizeOfRawData);
+			continue;
+		}
 
 		memcpy_s(module_in_memory.get() + sections_array[i].VirtualAddress, sections_array[i].SizeOfRawData, module_on_disk.get() + sections_array[i].PointerToRawData, sections_array[i].SizeOfRawData);
 	}
@@ -89,7 +92,7 @@ int main(int argc, char **argv)
 	output_function_address("ApiSetResolveToHost", ntdll32, true);
 	output_function_address("LdrpHandleTlsData", ntdll32, true);
 
-	if constexpr(_M_X64)
+	if constexpr(sizeof(void*) != 4)
 	{
 		std::cout << "\nx64 ntdll:" << std::endl;
 
